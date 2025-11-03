@@ -1,5 +1,5 @@
 [package]
-name = "WinAppsUpdater"
+name = "win_apps_updater"
 version = "1.0.0"
 edition = "2021"
 
@@ -16,7 +16,7 @@ serde = { version = "1.0", features = ["derive"] }
 winresource = "0.1"
 
 [lib]
-name = "WinAppsUpdater"
+name = "win_apps_updater"
 path = "src/lib.rs"
 
 [[bin]]

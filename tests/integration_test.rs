@@ -1,4 +1,4 @@
-use WinAppsUpdater::models::{AppItem, UpdatableApp};
+use win_apps_updater::models::{AppItem, UpdatableApp};
 
 #[test]
 fn test_updatable_app_equality() {
