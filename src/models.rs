@@ -11,14 +11,8 @@ pub struct UpdatableApp {
 }
 
 impl UpdatableApp {
-    /// Creates a new UpdatableApp instance
-    pub fn new(
-        name: String,
-        id: String,
-        version: String,
-        available: String,
-        source: String,
-    ) -> Self {
+    /// Creates a new UpdatableApp
+    pub fn new(name: String, id: String, version: String, available: String, source: String) -> Self {
         Self {
             name,
             id,

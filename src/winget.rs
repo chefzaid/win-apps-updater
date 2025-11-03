@@ -71,13 +71,7 @@ fn parse_winget_output(output: &str) -> Result<Vec<UpdatableApp>, String> {
             let name = name_parts.join(" ");
 
             if !name.is_empty() && !id.is_empty() {
-                apps.push(UpdatableApp {
-                    name,
-                    id,
-                    version,
-                    available,
-                    source,
-                });
+                apps.push(UpdatableApp::new(name, id, version, available, source));
             }
         }
     }
