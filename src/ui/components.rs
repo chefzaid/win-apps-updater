@@ -1,266 +1,510 @@
 use crate::app::AppState;
 use crate::models::Message;
 use iced::{
-    widget::{button, checkbox, column, container, horizontal_rule, row, scrollable, text, Column},
-    Alignment, Color, Element, Length,
+    widget::{
+        button, checkbox, column, container, horizontal_rule, row, scrollable, stack, text,
+        text_input, Column,
+    },
+    Alignment, Color, Element, Font, Length,
 };
 
-/// Builds the main view for the application
+// ── Colour palette ───────────────────────────────────────────────────
+
+const ACCENT: Color = Color::from_rgb(0.30, 0.56, 0.93);
+const SURFACE: Color = Color::from_rgb(0.13, 0.13, 0.17);
+const SURFACE_LIGHT: Color = Color::from_rgb(0.17, 0.17, 0.22);
+const HEADER_BG: Color = Color::from_rgb(0.10, 0.10, 0.14);
+const ROW_ALT: Color = Color::from_rgb(0.15, 0.15, 0.19);
+const ROW_NORMAL: Color = Color::from_rgb(0.12, 0.12, 0.16);
+const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.55, 0.60);
+const SUCCESS_CLR: Color = Color::from_rgb(0.30, 0.80, 0.30);
+const FAILURE_CLR: Color = Color::from_rgb(0.90, 0.25, 0.25);
+const WARNING_CLR: Color = Color::from_rgb(1.0, 0.65, 0.15);
+const INFO_CLR: Color = Color::from_rgb(0.40, 0.70, 1.0);
+const OVERLAY_BG: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.70);
+const DIALOG_BG: Color = Color::from_rgb(0.16, 0.16, 0.20);
+
+const BOLD: Font = Font {
+    weight: iced::font::Weight::Bold,
+    family: iced::font::Family::SansSerif,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
+// ── Public entry point ───────────────────────────────────────────────
+
+/// Builds the complete view for the application.
 pub fn build_view(state: &AppState) -> Element<'_, Message> {
-    let title = text("Windows Apps Updater").size(32);
+    let base = build_base_content(state);
 
-    let button_row = build_button_row(state);
-    let status = build_status_text(state);
-    let scrollable_list = build_app_list(state);
+    let mut layers: Vec<Element<'_, Message>> = vec![base];
 
-    let mut content = column![title, button_row, status, scrollable_list]
-        .spacing(10)
-        .padding(20)
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-    // Add confirmation dialog if needed
     if state.show_confirmation {
-        content = content.push(build_confirmation_dialog(state));
+        layers.push(build_confirmation_overlay(state));
     }
-
-    // Add results dialog if needed
     if state.show_results_dialog {
-        content = content.push(build_results_dialog(state));
+        layers.push(build_results_overlay(state));
     }
 
-    content.into()
-}
-
-/// Builds the button row with Refresh, Select All, Deselect All, and Update buttons
-fn build_button_row(state: &AppState) -> Element<'_, Message> {
-    let refresh_button = create_button("Refresh", !state.updating, Message::LoadApps);
-    let select_all_button = create_button("Select All", !state.updating, Message::SelectAll);
-    let deselect_all_button =
-        create_button("Deselect All", !state.updating, Message::DeselectAll);
-
-    let update_button = if state.updating {
-        button("Updating...").padding(10)
-    } else {
-        button("Update Selected")
-            .on_press(Message::UpdateSelected)
-            .padding(10)
-    };
-
-    row![
-        refresh_button,
-        select_all_button,
-        deselect_all_button,
-        update_button,
-    ]
-    .spacing(10)
-    .padding(10)
-    .into()
-}
-
-/// Creates a button with optional enabled state
-fn create_button(label: &str, enabled: bool, message: Message) -> button::Button<'_, Message> {
-    if enabled {
-        button(label).on_press(message).padding(10)
-    } else {
-        button(label).padding(10)
-    }
-}
-
-/// Builds the status text display
-fn build_status_text(state: &AppState) -> Element<'_, Message> {
-    text(&state.status_message)
-        .size(14)
+    stack(layers)
         .width(Length::Fill)
-        .into()
-}
-
-/// Builds the scrollable list of apps
-fn build_app_list(state: &AppState) -> Element<'_, Message> {
-    let mut app_list = Column::new().spacing(5).padding(10);
-
-    if state.loading {
-        app_list = app_list.push(text("Loading..."));
-    } else if state.apps.is_empty() {
-        app_list = app_list.push(text("No apps to display"));
-    } else {
-        app_list = app_list.push(build_header_row());
-        app_list = app_list.push(horizontal_rule(1));
-
-        for (index, app_item) in state.apps.iter().enumerate() {
-            app_list = app_list.push(build_app_row(app_item, index, state.updating));
-
-            if index < state.apps.len() - 1 {
-                app_list = app_list.push(horizontal_rule(1));
-            }
-        }
-    }
-
-    scrollable(app_list)
         .height(Length::Fill)
-        .width(Length::Fill)
         .into()
 }
 
-/// Builds the header row for the app list
-fn build_header_row() -> Element<'static, Message> {
-    row![
-        text("").width(Length::Fixed(30.0)),
-        text("Application")
-            .width(Length::FillPortion(3))
-            .size(14),
-        text("Installed Version")
-            .width(Length::FillPortion(2))
-            .size(14),
-        text("Latest Version")
-            .width(Length::FillPortion(2))
-            .size(14),
-    ]
-    .spacing(10)
-    .into()
+// ── Base content ─────────────────────────────────────────────────────
+
+fn build_base_content(state: &AppState) -> Element<'_, Message> {
+    let title_bar = build_title_bar(state);
+    let toolbar = build_toolbar(state);
+    let search = build_search_bar(state);
+    let app_list = build_app_list(state);
+    let status_bar = build_status_bar(state);
+
+    column![title_bar, toolbar, search, app_list, status_bar]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
-/// Builds a single app row
-fn build_app_row(
-    app_item: &crate::models::AppItem,
-    index: usize,
-    updating: bool,
-) -> Element<'_, Message> {
-    let checkbox_widget = if updating {
-        checkbox("", app_item.selected)
+fn build_title_bar(state: &AppState) -> Element<'_, Message> {
+    let title = text("Windows Apps Updater")
+        .size(26)
+        .color(Color::WHITE)
+        .font(BOLD);
+
+    let selected = state.selected_count();
+    let badge: Element<'_, Message> = if selected > 0 {
+        text(format!("{selected} selected"))
+            .size(13)
+            .color(ACCENT)
+            .into()
     } else {
-        checkbox("", app_item.selected).on_toggle(move |_| Message::ToggleApp(index))
+        text("").size(13).into()
     };
 
-    row![
-        checkbox_widget,
-        text(&app_item.app.name).width(Length::FillPortion(3)),
-        text(&app_item.app.version).width(Length::FillPortion(2)),
-        text(&app_item.app.available).width(Length::FillPortion(2)),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center)
-    .into()
-}
-
-/// Builds the confirmation dialog
-fn build_confirmation_dialog(state: &AppState) -> Element<'_, Message> {
-    let mut apps_text = String::from("The following apps will be updated:\n\n");
-    for app_id in &state.apps_needing_close {
-        apps_text.push_str(&format!("• {}\n", app_id));
-    }
-    apps_text.push_str("\nThey may need to be closed before updating. Continue?");
-
-    let dialog = column![
-        text("Confirm Update").size(24),
-        text(apps_text).size(14),
-        row![
-            button("Yes, Proceed")
-                .on_press(Message::ConfirmUpdate)
-                .padding(10),
-            button("Cancel")
-                .on_press(Message::CancelUpdate)
-                .padding(10),
-        ]
-        .spacing(10),
-    ]
-    .spacing(20)
-    .padding(30)
-    .width(Length::Fixed(500.0));
-
-    create_dialog_overlay(dialog)
-}
-
-/// Builds the results dialog
-fn build_results_dialog(state: &AppState) -> Element<'_, Message> {
-    let mut results_column = Column::new().spacing(5);
-
-    for result in &state.update_results {
-        let (result_text, color) = parse_result_status(result);
-        results_column = results_column.push(text(result_text).size(14).color(color));
-    }
-
-    let header = row![
-        text("Update Results").size(24).width(Length::Fill),
-        button("X")
-            .on_press(Message::CloseResultsDialog)
-            .padding(5)
-            .style(create_close_button_style),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-
-    let inner_dialog = container(
-        column![header, scrollable(results_column).height(Length::Fixed(300.0)),]
-            .spacing(20)
-            .padding(30),
+    container(
+        row![title, badge]
+            .spacing(16)
+            .align_y(Alignment::Center),
     )
-    .width(Length::Fixed(600.0))
-    .style(create_dialog_style);
-
-    create_dialog_overlay(inner_dialog)
+    .padding([16, 24])
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(HEADER_BG)),
+        ..Default::default()
+    })
+    .into()
 }
 
-/// Parses result status and returns text and color
-fn parse_result_status(result: &str) -> (String, Color) {
-    if result.starts_with("SUCCESS:") {
-        (
-            result.replace("SUCCESS:", ""),
-            Color::from_rgb(0.0, 0.8, 0.0),
-        )
-    } else if result.starts_with("FAILURE:") {
-        (
-            result.replace("FAILURE:", ""),
-            Color::from_rgb(0.9, 0.0, 0.0),
-        )
-    } else if result.starts_with("[!]") {
-        (result.to_string(), Color::from_rgb(1.0, 0.6, 0.0))
-    } else if result.starts_with("[i]") {
-        (result.to_string(), Color::from_rgb(0.4, 0.7, 1.0))
+fn build_toolbar(state: &AppState) -> Element<'_, Message> {
+    let enabled = !state.updating && !state.loading;
+
+    let refresh = styled_button("Refresh", enabled, Message::LoadApps);
+    let select_all = styled_button("Select All", enabled, Message::SelectAll);
+    let deselect_all = styled_button("Deselect All", enabled, Message::DeselectAll);
+
+    let update_btn = if state.updating {
+        styled_button_accent("Updating...", false, Message::UpdateSelected)
     } else {
-        (result.to_string(), Color::WHITE)
-    }
+        styled_button_accent(
+            "Update Selected",
+            enabled && state.selected_count() > 0,
+            Message::UpdateSelected,
+        )
+    };
+
+    container(
+        row![refresh, select_all, deselect_all, update_btn]
+            .spacing(8)
+            .align_y(Alignment::Center),
+    )
+    .padding([10, 24])
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(SURFACE_LIGHT)),
+        ..Default::default()
+    })
+    .into()
 }
 
-/// Creates a dialog overlay with semi-transparent background
-fn create_dialog_overlay<'a, T: Into<Element<'a, Message>>>(
-    content: T,
-) -> Element<'a, Message> {
-    container(content)
+fn build_search_bar(state: &AppState) -> Element<'_, Message> {
+    let input = text_input("Filter apps by name or ID...", &state.search_query)
+        .on_input(Message::SearchChanged)
+        .size(14)
+        .padding(10);
+
+    container(input)
+        .padding([8, 24])
         .width(Length::Fill)
-        .height(Length::Fill)
-        .center(Length::Fill)
-        .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(Color::from_rgba(
-                0.0, 0.0, 0.0, 0.7,
-            ))),
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(SURFACE)),
             ..Default::default()
         })
         .into()
 }
 
-/// Style for the dialog container
-fn create_dialog_style(_theme: &iced::Theme) -> container::Style {
-    container::Style {
-        background: Some(iced::Background::Color(Color::from_rgb(0.15, 0.15, 0.15))),
+fn build_status_bar(state: &AppState) -> Element<'_, Message> {
+    let visible_count = state.visible_indices().len();
+    let total_count = state.apps.len();
+
+    let filter_info = if state.search_query.is_empty() {
+        String::new()
+    } else {
+        format!(" (showing {visible_count} of {total_count})")
+    };
+
+    container(
+        text(format!("{}{filter_info}", state.status_message))
+            .size(13)
+            .color(TEXT_MUTED),
+    )
+    .padding([10, 24])
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(HEADER_BG)),
+        ..Default::default()
+    })
+    .into()
+}
+
+// ── App list ─────────────────────────────────────────────────────────
+
+fn build_app_list(state: &AppState) -> Element<'_, Message> {
+    let mut list = Column::new().spacing(0).width(Length::Fill);
+
+    if state.loading {
+        list = list.push(
+            container(text("Loading...").size(16).color(TEXT_MUTED))
+                .padding(40)
+                .center_x(Length::Fill),
+        );
+    } else if state.apps.is_empty() {
+        list = list.push(
+            container(
+                column![
+                    text("All apps are up to date!")
+                        .size(18)
+                        .color(SUCCESS_CLR),
+                    text("Click Refresh to check again.")
+                        .size(13)
+                        .color(TEXT_MUTED),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
+            .padding(40)
+            .center_x(Length::Fill),
+        );
+    } else {
+        list = list.push(build_list_header());
+
+        let visible = state.visible_indices();
+        if visible.is_empty() {
+            list = list.push(
+                container(
+                    text("No apps match your filter.")
+                        .size(14)
+                        .color(TEXT_MUTED),
+                )
+                .padding(20)
+                .center_x(Length::Fill),
+            );
+        } else {
+            for (row_num, &idx) in visible.iter().enumerate() {
+                let bg = if row_num % 2 == 0 {
+                    ROW_NORMAL
+                } else {
+                    ROW_ALT
+                };
+                list = list.push(build_app_row(&state.apps[idx], idx, state.updating, bg));
+            }
+        }
+    }
+
+    scrollable(list)
+        .height(Length::Fill)
+        .width(Length::Fill)
+        .into()
+}
+
+fn build_list_header() -> Element<'static, Message> {
+    container(
+        row![
+            text("").width(Length::Fixed(40.0)),
+            text("Application")
+                .size(12)
+                .color(TEXT_MUTED)
+                .font(BOLD)
+                .width(Length::FillPortion(4)),
+            text("ID")
+                .size(12)
+                .color(TEXT_MUTED)
+                .font(BOLD)
+                .width(Length::FillPortion(3)),
+            text("Installed")
+                .size(12)
+                .color(TEXT_MUTED)
+                .font(BOLD)
+                .width(Length::FillPortion(2)),
+            text("Available")
+                .size(12)
+                .color(TEXT_MUTED)
+                .font(BOLD)
+                .width(Length::FillPortion(2)),
+            text("Source")
+                .size(12)
+                .color(TEXT_MUTED)
+                .font(BOLD)
+                .width(Length::FillPortion(1)),
+        ]
+        .spacing(8)
+        .padding([0, 8])
+        .align_y(Alignment::Center),
+    )
+    .padding([8, 16])
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(HEADER_BG)),
         border: iced::Border {
-            color: Color::from_rgb(0.5, 0.5, 0.5),
-            width: 2.0,
-            radius: 10.0.into(),
+            color: Color::from_rgb(0.2, 0.2, 0.25),
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn build_app_row(
+    item: &crate::models::AppItem,
+    index: usize,
+    updating: bool,
+    bg: Color,
+) -> Element<'_, Message> {
+    let cb = if updating {
+        checkbox("", item.selected)
+    } else {
+        checkbox("", item.selected).on_toggle(move |_| Message::ToggleApp(index))
+    };
+
+    container(
+        row![
+            container(cb).width(Length::Fixed(40.0)),
+            text(&item.app.name)
+                .size(14)
+                .width(Length::FillPortion(4)),
+            text(&item.app.id)
+                .size(13)
+                .color(TEXT_MUTED)
+                .width(Length::FillPortion(3)),
+            text(&item.app.version)
+                .size(13)
+                .width(Length::FillPortion(2)),
+            text(&item.app.available)
+                .size(13)
+                .color(ACCENT)
+                .width(Length::FillPortion(2)),
+            text(&item.app.source)
+                .size(12)
+                .color(TEXT_MUTED)
+                .width(Length::FillPortion(1)),
+        ]
+        .spacing(8)
+        .padding([0, 8])
+        .align_y(Alignment::Center),
+    )
+    .padding([6, 16])
+    .width(Length::Fill)
+    .style(move |_| container::Style {
+        background: Some(iced::Background::Color(bg)),
+        ..Default::default()
+    })
+    .into()
+}
+
+// ── Dialogs ──────────────────────────────────────────────────────────
+
+fn build_confirmation_overlay(state: &AppState) -> Element<'_, Message> {
+    let mut apps_col = Column::new().spacing(4);
+    for (name, id) in &state.pending_updates {
+        apps_col = apps_col.push(
+            text(format!("  {name}  ({id})"))
+                .size(13)
+                .color(Color::from_rgb(0.8, 0.8, 0.85)),
+        );
+    }
+
+    let note = text("These apps may need to be closed before updating.")
+        .size(12)
+        .color(WARNING_CLR);
+
+    let buttons = row![
+        styled_button_accent("Yes, Proceed", true, Message::ConfirmUpdate),
+        styled_button("Cancel", true, Message::CancelUpdate),
+    ]
+    .spacing(12);
+
+    let dialog = container(
+        column![
+            text("Confirm Update").size(22).color(Color::WHITE).font(BOLD),
+            horizontal_rule(1),
+            text(format!(
+                "The following {} app(s) will be updated:",
+                state.pending_updates.len()
+            ))
+            .size(14),
+            container(scrollable(apps_col)).max_height(250),
+            note,
+            buttons,
+        ]
+        .spacing(16)
+        .padding(28)
+        .max_width(560),
+    )
+    .style(dialog_style);
+
+    overlay_backdrop(dialog)
+}
+
+fn build_results_overlay(state: &AppState) -> Element<'_, Message> {
+    let mut results_col = Column::new().spacing(6);
+    for result in &state.update_results {
+        let (display, color) = format_result(result);
+        results_col = results_col.push(text(display).size(13).color(color));
+    }
+
+    let header = row![
+        text("Update Results")
+            .size(22)
+            .color(Color::WHITE)
+            .font(BOLD)
+            .width(Length::Fill),
+        button("X")
+            .on_press(Message::CloseResultsDialog)
+            .padding([4, 10])
+            .style(close_button_style),
+    ]
+    .align_y(Alignment::Center);
+
+    let dialog = container(
+        column![
+            header,
+            horizontal_rule(1),
+            scrollable(results_col).height(Length::Fixed(320.0)),
+        ]
+        .spacing(16)
+        .padding(28)
+        .max_width(620),
+    )
+    .style(dialog_style);
+
+    overlay_backdrop(dialog)
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+fn format_result(result: &str) -> (String, Color) {
+    if let Some(rest) = result.strip_prefix("SUCCESS:") {
+        (format!("  {rest}"), SUCCESS_CLR)
+    } else if let Some(rest) = result.strip_prefix("FAILURE:") {
+        (format!("  {rest}"), FAILURE_CLR)
+    } else if result.starts_with("[!]") {
+        (result.to_string(), WARNING_CLR)
+    } else if result.starts_with("[i]") {
+        (result.to_string(), INFO_CLR)
+    } else {
+        (result.to_string(), Color::WHITE)
+    }
+}
+
+fn overlay_backdrop<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(OVERLAY_BG)),
+            ..Default::default()
+        })
+        .into()
+}
+
+fn dialog_style(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(DIALOG_BG)),
+        border: iced::Border {
+            color: Color::from_rgb(0.3, 0.3, 0.38),
+            width: 1.5,
+            radius: 12.0.into(),
         },
         ..Default::default()
     }
 }
 
-/// Style for the close button
-fn create_close_button_style(_theme: &iced::Theme, _status: button::Status) -> button::Style {
+fn close_button_style(_theme: &iced::Theme, _status: button::Status) -> button::Style {
     button::Style {
         background: Some(iced::Background::Color(Color::TRANSPARENT)),
-        text_color: Color::from_rgb(0.8, 0.8, 0.8),
+        text_color: Color::from_rgb(0.7, 0.7, 0.7),
         border: iced::Border {
             color: Color::TRANSPARENT,
             width: 0.0,
-            radius: 0.0.into(),
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn styled_button(label: &str, enabled: bool, msg: Message) -> Element<'_, Message> {
+    let btn = button(text(label).size(13))
+        .padding([8, 16])
+        .style(toolbar_button_style);
+
+    if enabled { btn.on_press(msg) } else { btn }.into()
+}
+
+fn styled_button_accent(label: &str, enabled: bool, msg: Message) -> Element<'_, Message> {
+    let btn = button(text(label).size(13))
+        .padding([8, 16])
+        .style(accent_button_style);
+
+    if enabled { btn.on_press(msg) } else { btn }.into()
+}
+
+fn toolbar_button_style(_theme: &iced::Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.25, 0.25, 0.30),
+        button::Status::Pressed => Color::from_rgb(0.20, 0.20, 0.25),
+        _ => Color::from_rgb(0.22, 0.22, 0.27),
+    };
+
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: Color::from_rgb(0.85, 0.85, 0.88),
+        border: iced::Border {
+            color: Color::from_rgb(0.3, 0.3, 0.35),
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn accent_button_style(_theme: &iced::Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.35, 0.60, 0.96),
+        button::Status::Pressed => Color::from_rgb(0.25, 0.50, 0.86),
+        _ => ACCENT,
+    };
+
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: Color::WHITE,
+        border: iced::Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 6.0.into(),
         },
         ..Default::default()
     }

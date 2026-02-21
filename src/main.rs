@@ -15,6 +15,8 @@ fn main() -> iced::Result {
     iced::application("Windows Apps Updater", AppState::update, AppState::view)
         .theme(|_| Theme::Dark)
         .window(iced::window::Settings {
+            size: iced::Size::new(1050.0, 700.0),
+            min_size: Some(iced::Size::new(700.0, 450.0)),
             icon,
             ..Default::default()
         })
