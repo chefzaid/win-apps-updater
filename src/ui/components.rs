@@ -2,8 +2,8 @@ use crate::app::AppState;
 use crate::models::Message;
 use iced::{
     widget::{
-        button, checkbox, column, container, horizontal_rule, row, scrollable, stack, text,
-        text_input, Column,
+        button, checkbox, column, container, horizontal_rule, progress_bar, row, scrollable,
+        stack, text, text_input, Column,
     },
     Alignment, Color, Element, Font, Length,
 };
@@ -61,11 +61,16 @@ fn build_base_content(state: &AppState) -> Element<'_, Message> {
     let app_list = build_app_list(state);
     let status_bar = build_status_bar(state);
 
-    column![title_bar, toolbar, search, app_list, status_bar]
-        .spacing(0)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    let mut content = Column::new().spacing(0).width(Length::Fill).height(Length::Fill);
+    content = content.push(title_bar);
+    content = content.push(toolbar);
+    if state.updating {
+        content = content.push(build_progress_bar(state));
+    }
+    content = content.push(search);
+    content = content.push(app_list);
+    content = content.push(status_bar);
+    content.into()
 }
 
 fn build_title_bar(state: &AppState) -> Element<'_, Message> {
@@ -242,7 +247,7 @@ fn build_list_header() -> Element<'static, Message> {
                 .size(12)
                 .color(TEXT_MUTED)
                 .font(BOLD)
-                .width(Length::FillPortion(3)),
+                .width(Length::FillPortion(4)),
             text("Installed")
                 .size(12)
                 .color(TEXT_MUTED)
@@ -253,11 +258,6 @@ fn build_list_header() -> Element<'static, Message> {
                 .color(TEXT_MUTED)
                 .font(BOLD)
                 .width(Length::FillPortion(2)),
-            text("Source")
-                .size(12)
-                .color(TEXT_MUTED)
-                .font(BOLD)
-                .width(Length::FillPortion(1)),
         ]
         .spacing(8)
         .padding([0, 8])
@@ -298,7 +298,7 @@ fn build_app_row(
             text(&item.app.id)
                 .size(13)
                 .color(TEXT_MUTED)
-                .width(Length::FillPortion(3)),
+                .width(Length::FillPortion(4)),
             text(&item.app.version)
                 .size(13)
                 .width(Length::FillPortion(2)),
@@ -306,10 +306,6 @@ fn build_app_row(
                 .size(13)
                 .color(ACCENT)
                 .width(Length::FillPortion(2)),
-            text(&item.app.source)
-                .size(12)
-                .color(TEXT_MUTED)
-                .width(Length::FillPortion(1)),
         ]
         .spacing(8)
         .padding([0, 8])
@@ -507,6 +503,135 @@ fn accent_button_style(_theme: &iced::Theme, status: button::Status) -> button::
             radius: 6.0.into(),
         },
         ..Default::default()
+    }
+}
+
+// ── Progress bar ─────────────────────────────────────────────────────
+
+fn build_progress_bar(state: &AppState) -> Element<'_, Message> {
+    let pct = if state.update_total > 0 {
+        state.update_completed as f32 / state.update_total as f32 * 100.0
+    } else {
+        0.0
+    };
+
+    let label = text(format!(
+        "{}/{} apps updated",
+        state.update_completed, state.update_total
+    ))
+    .size(12)
+    .color(TEXT_MUTED);
+
+    container(
+        column![
+            label,
+            progress_bar(0.0..=100.0, pct)
+                .height(6)
+                .style(progress_bar_style),
+        ]
+        .spacing(4),
+    )
+    .padding([8, 24])
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(SURFACE)),
+        ..Default::default()
+    })
+    .into()
+}
+
+fn progress_bar_style(_theme: &iced::Theme) -> progress_bar::Style {
+    progress_bar::Style {
+        background: iced::Background::Color(Color::from_rgb(0.20, 0.20, 0.25)),
+        bar: iced::Background::Color(ACCENT),
+        border: iced::Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 3.0.into(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_result_success() {
+        let (display, color) = format_result("SUCCESS:App.Id - updated successfully");
+        assert!(display.contains("App.Id"));
+        assert_eq!(color, SUCCESS_CLR);
+    }
+
+    #[test]
+    fn test_format_result_failure() {
+        let (display, color) = format_result("FAILURE:App.Id - download error");
+        assert!(display.contains("App.Id"));
+        assert_eq!(color, FAILURE_CLR);
+    }
+
+    #[test]
+    fn test_format_result_warning() {
+        let (display, color) = format_result("[!] App.Id - needs to be closed");
+        assert!(display.contains("App.Id"));
+        assert_eq!(color, WARNING_CLR);
+    }
+
+    #[test]
+    fn test_format_result_info() {
+        let (display, color) = format_result("[i] App.Id - already up to date");
+        assert!(display.contains("App.Id"));
+        assert_eq!(color, INFO_CLR);
+    }
+
+    #[test]
+    fn test_format_result_plain() {
+        let (display, color) = format_result("Some unknown format");
+        assert_eq!(display, "Some unknown format");
+        assert_eq!(color, Color::WHITE);
+    }
+
+    #[test]
+    fn test_progress_bar_style_colors() {
+        let style = progress_bar_style(&iced::Theme::Dark);
+        // Verify it produces the expected accent bar colour
+        assert_eq!(style.bar, iced::Background::Color(ACCENT));
+    }
+
+    #[test]
+    fn test_toolbar_button_style_variants() {
+        let default = toolbar_button_style(&iced::Theme::Dark, button::Status::Active);
+        let hovered = toolbar_button_style(&iced::Theme::Dark, button::Status::Hovered);
+        let pressed = toolbar_button_style(&iced::Theme::Dark, button::Status::Pressed);
+        assert!(default.background.is_some());
+        assert!(hovered.background.is_some());
+        assert!(pressed.background.is_some());
+        // Hovered should be brighter than default
+        assert_ne!(default.background, hovered.background);
+    }
+
+    #[test]
+    fn test_accent_button_style_variants() {
+        let default = accent_button_style(&iced::Theme::Dark, button::Status::Active);
+        let hovered = accent_button_style(&iced::Theme::Dark, button::Status::Hovered);
+        assert_eq!(default.text_color, Color::WHITE);
+        assert_eq!(hovered.text_color, Color::WHITE);
+        assert_ne!(default.background, hovered.background);
+    }
+
+    #[test]
+    fn test_close_button_style_transparent() {
+        let style = close_button_style(&iced::Theme::Dark, button::Status::Active);
+        assert_eq!(
+            style.background,
+            Some(iced::Background::Color(Color::TRANSPARENT))
+        );
+    }
+
+    #[test]
+    fn test_dialog_style_has_border() {
+        let style = dialog_style(&iced::Theme::Dark);
+        assert!(style.border.width > 0.0);
     }
 }
 

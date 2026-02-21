@@ -251,6 +251,9 @@ fn test_app_state_default_values() {
     assert!(state.search_query.is_empty());
     assert!(state.pending_updates.is_empty());
     assert!(state.update_results.is_empty());
+    assert_eq!(state.update_total, 0);
+    assert_eq!(state.update_completed, 0);
+    assert!(state.update_queue.is_empty());
 }
 
 #[test]
@@ -341,5 +344,131 @@ fn test_parse_wrapped_winget_output() {
     assert_eq!(apps[0].version, "1.85.0");
     assert_eq!(apps[0].available, "1.85.1");
     assert!(apps[0].source.contains("winget"));
+}
+
+// ── Progress-related state tests ─────────────────────────────────────
+
+#[test]
+fn test_app_state_progress_percentage() {
+    let mut state = win_apps_updater::app::AppState::default();
+    state.update_total = 5;
+    state.update_completed = 3;
+    let pct = if state.update_total > 0 {
+        state.update_completed as f32 / state.update_total as f32 * 100.0
+    } else {
+        0.0
+    };
+    assert!((pct - 60.0).abs() < 0.01);
+}
+
+#[test]
+fn test_app_state_progress_zero_total() {
+    let state = win_apps_updater::app::AppState::default();
+    let pct = if state.update_total > 0 {
+        state.update_completed as f32 / state.update_total as f32 * 100.0
+    } else {
+        0.0
+    };
+    assert_eq!(pct, 0.0);
+}
+
+// ── Additional parsing edge cases ────────────────────────────────────
+
+#[test]
+fn test_parse_winget_with_cr_prefix_integration() {
+    let header = "\r   - \r   \\ \rName                               Id                                     Version          Available        Source";
+    let sep = "--------------------------------------------------------------------------------------------------------------";
+    let data1 = "Google Chrome                      Google.Chrome                          120.0.6099.109   120.0.6099.130   winget";
+    let data2 = "Firefox                            Mozilla.Firefox                        120.0            121.0            winget";
+    let footer = "2 upgrades available.";
+
+    let output = format!("{header}\n{sep}\n{data1}\n{data2}\n{footer}");
+    let apps = parse_winget_output(&output).unwrap();
+    assert_eq!(apps.len(), 2);
+    assert_eq!(apps[0].id, "Google.Chrome");
+    assert_eq!(apps[1].id, "Mozilla.Firefox");
+}
+
+#[test]
+fn test_parse_winget_preserves_all_fields() {
+    let output = "\
+Name       Id          Version   Available   Source
+---------------------------------------------------
+Notepad++  Note.Plus   8.5.0     8.6.0       winget
+1 upgrades available.";
+
+    let apps = parse_winget_output(output).unwrap();
+    assert_eq!(apps.len(), 1);
+    let app = &apps[0];
+    assert_eq!(app.name, "Notepad++");
+    assert_eq!(app.id, "Note.Plus");
+    assert_eq!(app.version, "8.5.0");
+    assert_eq!(app.available, "8.6.0");
+    assert_eq!(app.source, "winget");
+}
+
+#[test]
+fn test_app_item_matches_search_partial_id() {
+    let item = AppItem::from_app(UpdatableApp::new(
+        "Edge Browser".into(),
+        "Microsoft.Edge".into(),
+        "1.0".into(),
+        "2.0".into(),
+        "winget".into(),
+    ));
+    assert!(item.matches_search("micro"));
+    assert!(item.matches_search("EDGE"));
+    assert!(!item.matches_search("chrome"));
+}
+
+#[test]
+fn test_updatable_app_clone() {
+    let app = UpdatableApp::new(
+        "Test".into(),
+        "Test.App".into(),
+        "1.0".into(),
+        "2.0".into(),
+        "winget".into(),
+    );
+    let cloned = app.clone();
+    assert_eq!(app, cloned);
+}
+
+#[test]
+fn test_app_item_new_selected() {
+    let app = UpdatableApp::new(
+        "A".into(),
+        "A.App".into(),
+        "1.0".into(),
+        "2.0".into(),
+        "w".into(),
+    );
+    let item = AppItem::new(app, true);
+    assert!(item.selected);
+}
+
+#[test]
+fn test_parse_winget_many_apps() {
+    let mut lines = vec![
+        "Name                Id                 Version  Available  Source".to_string(),
+        "-".repeat(66),
+    ];
+    for i in 0..10 {
+        lines.push(format!(
+            "{:<20}{:<19}{:<9}{:<11}{}",
+            format!("App {i}"),
+            format!("Publisher.App{i}"),
+            "1.0",
+            "2.0",
+            "winget"
+        ));
+    }
+    lines.push("10 upgrades available.".to_string());
+
+    let output = lines.join("\n");
+    let apps = parse_winget_output(&output).unwrap();
+    assert_eq!(apps.len(), 10);
+    assert_eq!(apps[0].name, "App 0");
+    assert_eq!(apps[9].name, "App 9");
 }
 

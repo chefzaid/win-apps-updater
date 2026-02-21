@@ -85,8 +85,8 @@ pub enum Message {
     ToggleApp(usize),
     /// Initiate updating selected apps (shows confirmation).
     UpdateSelected,
-    /// Update process completed with per-app results.
-    UpdateComplete(Vec<String>),
+    /// A single app update completed with its result string.
+    UpdateSingleComplete(String),
     /// Select all visible apps.
     SelectAll,
     /// Deselect all visible apps.

@@ -23,6 +23,12 @@ pub struct AppState {
     pub update_results: Vec<String>,
     /// Current search / filter query.
     pub search_query: String,
+    /// Total number of apps to update in the current batch.
+    pub update_total: usize,
+    /// Number of apps updated so far in the current batch.
+    pub update_completed: usize,
+    /// All app IDs queued for the current update batch (`update_completed` is the cursor).
+    pub update_queue: Vec<String>,
 }
 
 impl Default for AppState {
@@ -37,6 +43,9 @@ impl Default for AppState {
             show_results_dialog: false,
             update_results: Vec::new(),
             search_query: String::new(),
+            update_total: 0,
+            update_completed: 0,
+            update_queue: Vec::new(),
         }
     }
 }
@@ -72,7 +81,7 @@ impl AppState {
             Message::AppsLoaded(result) => self.handle_apps_loaded(result),
             Message::ToggleApp(index) => self.handle_toggle_app(index),
             Message::UpdateSelected => self.handle_update_selected(),
-            Message::UpdateComplete(results) => self.handle_update_complete(results),
+            Message::UpdateSingleComplete(result) => self.handle_update_single_complete(result),
             Message::SelectAll => self.handle_select_all(),
             Message::DeselectAll => self.handle_deselect_all(),
             Message::ConfirmUpdate => self.handle_confirm_update(),
@@ -138,15 +147,30 @@ impl AppState {
 
     fn handle_confirm_update(&mut self) -> Task<Message> {
         self.show_confirmation = false;
-        let ids: Vec<String> = self
+        self.update_queue = self
             .pending_updates
             .iter()
             .map(|(_, id)| id.clone())
             .collect();
-        let count = ids.len();
+        self.update_total = self.update_queue.len();
+        self.update_completed = 0;
+        self.update_results.clear();
         self.updating = true;
-        self.status_message = format!("Updating {count} app(s)...");
-        Task::perform(update_apps_sequential(ids), Message::UpdateComplete)
+
+        if self.update_queue.is_empty() {
+            return Task::none();
+        }
+
+        let id = self.update_queue[0].clone();
+        self.status_message = format!("Updating 0/{} app(s)...", self.update_total);
+        Task::perform(
+            async move {
+                match update_single_app(&id) {
+                    Ok(msg) | Err(msg) => msg,
+                }
+            },
+            Message::UpdateSingleComplete,
+        )
     }
 
     fn handle_cancel_update(&mut self) -> Task<Message> {
@@ -156,13 +180,31 @@ impl AppState {
         Task::none()
     }
 
-    fn handle_update_complete(&mut self, results: Vec<String>) -> Task<Message> {
+    fn handle_update_single_complete(&mut self, result: String) -> Task<Message> {
+        self.update_results.push(result);
+        self.update_completed += 1;
+
+        if self.update_completed < self.update_total {
+            let id = self.update_queue[self.update_completed].clone();
+            self.status_message = format!(
+                "Updating {}/{} app(s)...",
+                self.update_completed, self.update_total
+            );
+            return Task::perform(
+                async move {
+                    match update_single_app(&id) {
+                        Ok(msg) | Err(msg) => msg,
+                    }
+                },
+                Message::UpdateSingleComplete,
+            );
+        }
+
+        // All updates finished.
         self.updating = false;
-        self.update_results = results;
         self.show_results_dialog = true;
         self.status_message = String::from("Update complete");
 
-        // Deselect all apps
         for item in &mut self.apps {
             item.selected = false;
         }
@@ -197,18 +239,6 @@ impl AppState {
         self.search_query = query;
         Task::none()
     }
-}
-
-/// Updates apps sequentially and returns per-app results.
-async fn update_apps_sequential(app_ids: Vec<String>) -> Vec<String> {
-    let mut results = Vec::with_capacity(app_ids.len());
-    for id in &app_ids {
-        let result = match update_single_app(id) {
-            Ok(msg) | Err(msg) => msg,
-        };
-        results.push(result);
-    }
-    results
 }
 
 #[cfg(test)]
@@ -379,6 +409,140 @@ mod tests {
         let mut state = AppState::default();
         let _ = state.handle_search_changed("firefox".into());
         assert_eq!(state.search_query, "firefox");
+    }
+
+    #[test]
+    fn test_handle_load_apps_resets_state() {
+        let mut state = AppState::default();
+        state.loading = false;
+        state.search_query = "test".into();
+        let _ = state.handle_load_apps();
+        assert!(state.loading);
+        assert!(state.search_query.is_empty());
+        assert_eq!(state.status_message, "Loading updatable apps...");
+    }
+
+    #[test]
+    fn test_handle_apps_loaded_ok() {
+        let mut state = AppState::default();
+        let apps = vec![
+            sample_app("Firefox", "Mozilla.Firefox"),
+            sample_app("Chrome", "Google.Chrome"),
+        ];
+        let _ = state.handle_apps_loaded(Ok(apps));
+        assert!(!state.loading);
+        assert_eq!(state.apps.len(), 2);
+        assert!(state.status_message.contains("2"));
+    }
+
+    #[test]
+    fn test_handle_apps_loaded_err() {
+        let mut state = AppState::default();
+        let _ = state.handle_apps_loaded(Err("Connection failed".into()));
+        assert!(!state.loading);
+        assert!(state.apps.is_empty());
+        assert!(state.status_message.contains("Error"));
+        assert!(state.status_message.contains("Connection failed"));
+    }
+
+    #[test]
+    fn test_handle_apps_loaded_empty() {
+        let mut state = AppState::default();
+        let _ = state.handle_apps_loaded(Ok(vec![]));
+        assert!(!state.loading);
+        assert!(state.apps.is_empty());
+        assert!(state.status_message.contains("0"));
+    }
+
+    #[test]
+    fn test_handle_confirm_update_sets_progress() {
+        let mut state = AppState::default();
+        state
+            .pending_updates
+            .push(("App A".into(), "A.App".into()));
+        state
+            .pending_updates
+            .push(("App B".into(), "B.App".into()));
+
+        let _ = state.handle_confirm_update();
+        assert!(!state.show_confirmation);
+        assert!(state.updating);
+        assert_eq!(state.update_total, 2);
+        assert_eq!(state.update_completed, 0);
+        assert_eq!(state.update_queue, vec!["A.App", "B.App"]);
+        assert!(state.status_message.contains("0/2"));
+    }
+
+    #[test]
+    fn test_handle_confirm_update_empty_queue() {
+        let mut state = AppState::default();
+        // pending_updates is empty
+        let _ = state.handle_confirm_update();
+        assert!(!state.show_confirmation);
+        assert_eq!(state.update_total, 0);
+    }
+
+    #[test]
+    fn test_handle_update_single_complete_continues() {
+        let mut state = AppState::default();
+        state.updating = true;
+        state.update_total = 3;
+        state.update_completed = 0;
+        state.update_queue = vec!["A.App".into(), "B.App".into(), "C.App".into()];
+
+        let _ = state.handle_update_single_complete("SUCCESS:A.App - done".into());
+
+        assert_eq!(state.update_completed, 1);
+        assert!(state.updating);
+        assert!(!state.show_results_dialog);
+        assert_eq!(state.update_results.len(), 1);
+        assert!(state.status_message.contains("1/3"));
+    }
+
+    #[test]
+    fn test_handle_update_single_complete_finishes() {
+        let mut state = AppState::default();
+        state.updating = true;
+        state.update_total = 1;
+        state.update_completed = 0;
+        state.update_queue = vec!["A.App".into()];
+        state.apps.push(AppItem::new(sample_app("A", "A.App"), true));
+
+        let _ = state.handle_update_single_complete("SUCCESS:A.App - done".into());
+
+        assert_eq!(state.update_completed, 1);
+        assert!(!state.updating);
+        assert!(state.show_results_dialog);
+        assert!(!state.apps[0].selected);
+        assert_eq!(state.update_results, vec!["SUCCESS:A.App - done"]);
+        assert_eq!(state.status_message, "Update complete");
+    }
+
+    #[test]
+    fn test_handle_update_single_complete_second_of_two() {
+        let mut state = AppState::default();
+        state.updating = true;
+        state.update_total = 2;
+        state.update_completed = 1; // first already done
+        state.update_results = vec!["SUCCESS:A - done".into()];
+        state.update_queue = vec!["A.App".into(), "B.App".into()];
+        state.apps.push(AppItem::new(sample_app("A", "A.App"), true));
+        state.apps.push(AppItem::new(sample_app("B", "B.App"), true));
+
+        let _ = state.handle_update_single_complete("FAILURE:B - err".into());
+
+        assert_eq!(state.update_completed, 2);
+        assert!(!state.updating);
+        assert!(state.show_results_dialog);
+        assert_eq!(state.update_results.len(), 2);
+    }
+
+    #[test]
+    fn test_progress_defaults() {
+        let state = AppState::default();
+        assert_eq!(state.update_total, 0);
+        assert_eq!(state.update_completed, 0);
+        assert!(state.update_queue.is_empty());
     }
 }
 

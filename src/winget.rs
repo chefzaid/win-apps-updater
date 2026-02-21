@@ -1,10 +1,20 @@
 use crate::models::UpdatableApp;
 use std::process::Command;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Flag to prevent winget from spawning a visible console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Retrieves the list of updatable applications from winget.
 pub fn get_updatable_apps() -> Result<Vec<UpdatableApp>, String> {
-    let output = Command::new("winget")
-        .args(["upgrade", "--include-unknown"])
+    let mut cmd = Command::new("winget");
+    cmd.args(["upgrade", "--include-unknown"]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to execute winget: {e}"))?;
 
@@ -194,15 +204,18 @@ fn safe_slice(s: &str, start: usize, end: usize) -> &str {
 
 /// Updates a single application by its winget ID.
 pub fn update_single_app(app_id: &str) -> Result<String, String> {
-    let output = Command::new("winget")
-        .args([
-            "upgrade",
-            "--id",
-            app_id,
-            "--accept-source-agreements",
-            "--accept-package-agreements",
-            "-h",
-        ])
+    let mut cmd = Command::new("winget");
+    cmd.args([
+        "upgrade",
+        "--id",
+        app_id,
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+        "-h",
+    ]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to execute winget for {app_id}: {e}"))?;
 
@@ -570,6 +583,146 @@ Notepad++  Notepad++.N 8.5.0     8.6.0       winget
         assert_eq!(apps[0].version, "120.0.6099.109");
         assert_eq!(apps[0].available, "120.0.6099.130");
         assert_eq!(apps[0].source, "winget");
+    }
+
+    #[test]
+    fn test_classify_update_result_close_all_instances() {
+        let result = classify_update_result("X.App", false, "", "close all instances");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("[!]"));
+    }
+
+    #[test]
+    fn test_classify_update_result_currently_in_use() {
+        let result = classify_update_result("X.App", false, "", "currently in use");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("[!]"));
+    }
+
+    #[test]
+    fn test_classify_update_result_success_path() {
+        let result = classify_update_result(
+            "Test.App",
+            true,
+            "Successfully installed Test.App",
+            "Successfully installed Test.App\n",
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("SUCCESS:"));
+    }
+
+    #[test]
+    fn test_classify_success_no_newer_package() {
+        let result = classify_success("Test.App", "No newer package versions");
+        assert!(result.starts_with("[i]"));
+        assert!(result.contains("already up to date"));
+    }
+
+    #[test]
+    fn test_extract_error_empty_combined() {
+        let result = extract_error("", "");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_error_uses_stderr() {
+        let result = extract_error("stdout line", "stderr error message\n");
+        assert_eq!(result, "stderr error message");
+    }
+
+    #[test]
+    fn test_extract_error_falls_back_to_stdout() {
+        let result = extract_error("stdout error message", "stdout error message\n");
+        // stderr_part equals stdout.trim(), so falls back to last non-empty stdout line
+        assert!(result.contains("stdout error message") || result.contains("error"));
+    }
+
+    #[test]
+    fn test_parse_app_line_boundary() {
+        let layout = ColumnLayout {
+            id_col: 10,
+            version_col: 25,
+            available_col: 40,
+            source_col: 55,
+        };
+        // Line exactly at id_col boundary
+        let result = parse_app_line("0123456789", &layout);
+        // Name is empty after trim or id is empty → None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_app_line_valid() {
+        let layout = ColumnLayout {
+            id_col: 10,
+            version_col: 25,
+            available_col: 40,
+            source_col: 55,
+        };
+        let line = format!(
+            "{:<10}{:<15}{:<15}{:<15}{}",
+            "MyApp", "My.App", "1.0.0", "2.0.0", "winget"
+        );
+        let result = parse_app_line(&line, &layout);
+        assert!(result.is_some());
+        let app = result.unwrap();
+        assert_eq!(app.name, "MyApp");
+        assert_eq!(app.id, "My.App");
+        assert_eq!(app.version, "1.0.0");
+        assert_eq!(app.available, "2.0.0");
+        assert_eq!(app.source, "winget");
+    }
+
+    #[test]
+    fn test_sanitize_multiline_mixed_cr() {
+        let input = "clean line\n\r   - \r   \\ \rspinner line\nanother clean\n";
+        let sanitized = sanitize_output(input);
+        assert!(sanitized.contains("clean line"));
+        assert!(sanitized.contains("spinner line"));
+        assert!(sanitized.contains("another clean"));
+        assert!(!sanitized.contains("   - "));
+    }
+
+    #[test]
+    fn test_parse_multiple_apps() {
+        let output = "\
+Name                Id                 Version   Available  Source
+------------------------------------------------------------------
+App One             AppOne.Id          1.0       2.0        winget
+App Two Long Name   AppTwo.Id          3.0       4.0        winget
+App Three           AppThree.Id        5.0       6.0        winget
+App Four            AppFour.Id         7.0       8.0        winget
+App Five            AppFive.Id         9.0       10.0       winget
+5 upgrades available.";
+
+        let apps = parse_winget_output(output).unwrap();
+        assert_eq!(apps.len(), 5);
+        assert_eq!(apps[0].name, "App One");
+        assert_eq!(apps[4].name, "App Five");
+        assert_eq!(apps[4].available, "10.0");
+    }
+
+    #[test]
+    fn test_parse_stops_at_empty_line() {
+        let output = "\
+Name   Id     Version  Available  Source
+-----------------------------------------
+App    A.A    1.0      2.0        winget
+
+Extra text that should be ignored";
+
+        let apps = parse_winget_output(output).unwrap();
+        assert_eq!(apps.len(), 1);
+    }
+
+    #[test]
+    fn test_safe_slice_zero_range() {
+        assert_eq!(safe_slice("hello", 3, 3), "");
+    }
+
+    #[test]
+    fn test_safe_slice_start_beyond_end() {
+        assert_eq!(safe_slice("hello", 10, 5), "");
     }
 }
 
