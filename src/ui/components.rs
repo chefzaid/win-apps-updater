@@ -365,55 +365,152 @@ fn build_confirmation_overlay(state: &AppState) -> Element<'_, Message> {
 }
 
 fn build_results_overlay(state: &AppState) -> Element<'_, Message> {
-    let mut results_col = Column::new().spacing(6);
-    for result in &state.update_results {
-        let (display, color) = format_result(result);
-        results_col = results_col.push(text(display).size(13).color(color));
+    // Tally results
+    let mut ok_count = 0usize;
+    let mut fail_count = 0usize;
+    let mut warn_count = 0usize;
+    for r in &state.update_results {
+        if r.starts_with("SUCCESS:") {
+            ok_count += 1;
+        } else if r.starts_with("FAILURE:") {
+            fail_count += 1;
+        } else {
+            warn_count += 1;
+        }
     }
 
+    // Summary badges
+    let summary = row![
+        result_badge(&format!("{ok_count} succeeded"), SUCCESS_CLR),
+        result_badge(&format!("{fail_count} failed"), FAILURE_CLR),
+        result_badge(&format!("{warn_count} other"), WARNING_CLR),
+    ]
+    .spacing(8);
+
+    // Per-app result rows
+    let mut results_col = Column::new().spacing(2);
+    for (i, result) in state.update_results.iter().enumerate() {
+        let (icon_txt, label, color) = format_result_row(result);
+        let bg = if i % 2 == 0 { ROW_NORMAL } else { ROW_ALT };
+
+        let result_row = container(
+            row![
+                container(
+                    text(icon_txt).size(12).color(Color::WHITE).font(BOLD)
+                )
+                .padding([2, 8])
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(color)),
+                    border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                    ..Default::default()
+                }),
+                text(label).size(13).color(Color::from_rgb(0.85, 0.85, 0.88)),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, 12])
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            ..Default::default()
+        });
+
+        results_col = results_col.push(result_row);
+    }
+
+    // Header row with title and close button
     let header = row![
         text("Update Results")
             .size(22)
             .color(Color::WHITE)
             .font(BOLD)
             .width(Length::Fill),
-        button("X")
+        button(text("X").size(14).font(BOLD))
             .on_press(Message::CloseResultsDialog)
             .padding([4, 10])
             .style(close_button_style),
     ]
     .align_y(Alignment::Center);
 
+    // "Done" button at the bottom
+    let done_btn = container(
+        styled_button_accent("Done", true, Message::CloseResultsDialog),
+    )
+    .width(Length::Fill)
+    .center_x(Length::Fill);
+
     let dialog = container(
         column![
             header,
             horizontal_rule(1),
-            scrollable(results_col).height(Length::Fixed(320.0)),
+            summary,
+            container(
+                scrollable(results_col)
+                    .height(Length::Fixed(280.0))
+                    .width(Length::Fill),
+            )
+            .width(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgb(0.11, 0.11, 0.14))),
+                border: iced::Border {
+                    color: Color::from_rgb(0.22, 0.22, 0.28),
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            }),
+            done_btn,
         ]
-        .spacing(16)
+        .spacing(14)
         .padding(28)
+        .width(Length::Fill)
         .max_width(620),
     )
+    .width(Length::FillPortion(3))
+    .center_x(Length::Fill)
     .style(dialog_style);
 
     overlay_backdrop(dialog)
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
+/// Small coloured badge for the results summary row.
+fn result_badge<'a>(label: &str, color: Color) -> Element<'a, Message> {
+    container(
+        text(label.to_string()).size(12).color(Color::WHITE).font(BOLD),
+    )
+    .padding([3, 10])
+    .style(move |_| container::Style {
+        background: Some(iced::Background::Color(Color {
+            a: 0.25,
+            ..color
+        })),
+        border: iced::Border {
+            color: Color { a: 0.5, ..color },
+            width: 1.0,
+            radius: 10.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
 
-fn format_result(result: &str) -> (String, Color) {
+/// Returns `(badge_text, description, badge_color)` for one result line.
+fn format_result_row(result: &str) -> (String, String, Color) {
     if let Some(rest) = result.strip_prefix("SUCCESS:") {
-        (format!("  {rest}"), SUCCESS_CLR)
+        ("OK".into(), rest.to_string(), SUCCESS_CLR)
     } else if let Some(rest) = result.strip_prefix("FAILURE:") {
-        (format!("  {rest}"), FAILURE_CLR)
-    } else if result.starts_with("[!]") {
-        (result.to_string(), WARNING_CLR)
-    } else if result.starts_with("[i]") {
-        (result.to_string(), INFO_CLR)
+        ("FAIL".into(), rest.to_string(), FAILURE_CLR)
+    } else if let Some(rest) = result.strip_prefix("[!]") {
+        ("WARN".into(), rest.trim().to_string(), WARNING_CLR)
+    } else if let Some(rest) = result.strip_prefix("[i]") {
+        ("INFO".into(), rest.trim().to_string(), INFO_CLR)
     } else {
-        (result.to_string(), Color::WHITE)
+        ("—".into(), result.to_string(), TEXT_MUTED)
     }
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────
 
 fn overlay_backdrop<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
@@ -439,14 +536,19 @@ fn dialog_style(_theme: &iced::Theme) -> container::Style {
     }
 }
 
-fn close_button_style(_theme: &iced::Theme, _status: button::Status) -> button::Style {
+fn close_button_style(_theme: &iced::Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.35, 0.15, 0.15),
+        button::Status::Pressed => Color::from_rgb(0.50, 0.15, 0.15),
+        _ => Color::from_rgb(0.22, 0.22, 0.27),
+    };
     button::Style {
-        background: Some(iced::Background::Color(Color::TRANSPARENT)),
-        text_color: Color::from_rgb(0.7, 0.7, 0.7),
+        background: Some(iced::Background::Color(bg)),
+        text_color: Color::from_rgb(0.85, 0.85, 0.85),
         border: iced::Border {
             color: Color::TRANSPARENT,
             width: 0.0,
-            radius: 4.0.into(),
+            radius: 6.0.into(),
         },
         ..Default::default()
     }
@@ -557,38 +659,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_result_success() {
-        let (display, color) = format_result("SUCCESS:App.Id - updated successfully");
-        assert!(display.contains("App.Id"));
+    fn test_format_result_row_success() {
+        let (badge, label, color) = format_result_row("SUCCESS:App.Id - updated successfully");
+        assert_eq!(badge, "OK");
+        assert!(label.contains("App.Id"));
         assert_eq!(color, SUCCESS_CLR);
     }
 
     #[test]
-    fn test_format_result_failure() {
-        let (display, color) = format_result("FAILURE:App.Id - download error");
-        assert!(display.contains("App.Id"));
+    fn test_format_result_row_failure() {
+        let (badge, label, color) = format_result_row("FAILURE:App.Id - download error");
+        assert_eq!(badge, "FAIL");
+        assert!(label.contains("App.Id"));
         assert_eq!(color, FAILURE_CLR);
     }
 
     #[test]
-    fn test_format_result_warning() {
-        let (display, color) = format_result("[!] App.Id - needs to be closed");
-        assert!(display.contains("App.Id"));
+    fn test_format_result_row_warning() {
+        let (badge, label, color) = format_result_row("[!] App.Id - needs to be closed");
+        assert_eq!(badge, "WARN");
+        assert!(label.contains("App.Id"));
         assert_eq!(color, WARNING_CLR);
     }
 
     #[test]
-    fn test_format_result_info() {
-        let (display, color) = format_result("[i] App.Id - already up to date");
-        assert!(display.contains("App.Id"));
+    fn test_format_result_row_info() {
+        let (badge, label, color) = format_result_row("[i] App.Id - already up to date");
+        assert_eq!(badge, "INFO");
+        assert!(label.contains("App.Id"));
         assert_eq!(color, INFO_CLR);
     }
 
     #[test]
-    fn test_format_result_plain() {
-        let (display, color) = format_result("Some unknown format");
-        assert_eq!(display, "Some unknown format");
-        assert_eq!(color, Color::WHITE);
+    fn test_format_result_row_plain() {
+        let (badge, label, color) = format_result_row("Some unknown format");
+        assert_eq!(badge, "\u{2014}");
+        assert_eq!(label, "Some unknown format");
+        assert_eq!(color, TEXT_MUTED);
     }
 
     #[test]
@@ -620,12 +727,16 @@ mod tests {
     }
 
     #[test]
-    fn test_close_button_style_transparent() {
-        let style = close_button_style(&iced::Theme::Dark, button::Status::Active);
-        assert_eq!(
-            style.background,
-            Some(iced::Background::Color(Color::TRANSPARENT))
-        );
+    fn test_close_button_style_has_background() {
+        let active = close_button_style(&iced::Theme::Dark, button::Status::Active);
+        let hovered = close_button_style(&iced::Theme::Dark, button::Status::Hovered);
+        let pressed = close_button_style(&iced::Theme::Dark, button::Status::Pressed);
+        // Active has a subtle dark background (not transparent)
+        assert!(active.background.is_some());
+        // Hovered turns reddish - should differ from active
+        assert_ne!(active.background, hovered.background);
+        // Pressed differs from hovered
+        assert_ne!(hovered.background, pressed.background);
     }
 
     #[test]

@@ -75,11 +75,7 @@ cargo test --test integration_test  # integration tests only
 
 ## Roadmap
 
-- [x] Search & filter
-- [x] Overall update progress bar
-- [x] Silent background winget execution
 - [ ] Show release date of latest update
-- [ ] Per-app progress indicator
 - [ ] Settings panel
 - [ ] Automatic update scheduling
 - [ ] System-tray notifications
