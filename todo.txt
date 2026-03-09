@@ -1,0 +1,3 @@
+add:
+  choco upgrade all --noop 
+as an option to Win Apps Updater
